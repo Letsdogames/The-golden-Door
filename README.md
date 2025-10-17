@@ -1,4 +1,3 @@
-
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -50,7 +49,7 @@
     <div id="ui">
         <div>Tasks: <span id="tasks">0</span>/3</div>
         <div>Health: <span id="health">150</span></div>
-        <div>Controls: WASD or Arrows</div>
+        <div>Controls: WASD or Arrows (R to restart)</div>
     </div>
     <div id="cutscene-text"></div>
     <script>
@@ -99,12 +98,44 @@
         const MAP_WIDTH = map[0].length; // 38
         const MAP_HEIGHT = map.length; // 35
 
+        // Clear any 2 or 3 to 0 for randomization
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+            for (let x = 0; x < MAP_WIDTH; x++) {
+                if (map[y][x] === 2 || map[y][x] === 3) {
+                    map[y][x] = 0;
+                }
+            }
+        }
+
+        // Find open positions
+        let openPositions = [];
+        for (let y = 0; y < MAP_HEIGHT; y++) {
+            for (let x = 0; x < MAP_WIDTH; x++) {
+                if (map[y][x] === 0 && !(x === 1 && y === 1)) { // Avoid player start
+                    openPositions.push({x, y});
+                }
+            }
+        }
+
+        // Shuffle function
+        function shuffle(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        }
+        shuffle(openPositions);
+
+        // Pick 3 for items, 1 for door
+        let itemPos = openPositions.slice(0, 3);
+        let doorPos = openPositions[3] || {x: 36, y: 34}; // Fallback
+
         // Load textures
         let wallTexture = new Image();
         wallTexture.src = 'https://files.idyllic.app/files/static/2839122'; // Dark brick wall texture
 
         let floorTexture = new Image();
-        floorTexture.src = 'https://opengameart.org/sites/default/files/preview_253.png'; // Stone floor texture, replace with a tileable one if needed
+        floorTexture.src = 'https://i.ibb.co/G6DRQdr/floor.jpg'; // New floor texture
 
         // Player - start at open space
         let player = { px: 1 * TILE + TILE / 2, py: 1 * TILE + TILE / 2 };
@@ -118,19 +149,11 @@
         monsterSprite.src = 'https://i.ibb.co/M57m3y52/pixlated-devil-Photoroom.png';
 
         // Items (tasks) - now as glowing cubes
-        let items = [];
-        for (let y = 0; y < MAP_HEIGHT; y++) {
-            for (let x = 0; x < MAP_WIDTH; x++) {
-                if (map[y][x] === 2) {
-                    items.push({ x, y, collected: false });
-                    map[y][x] = 0; // Set back to floor after collecting positions
-                }
-            }
-        }
+        let items = itemPos.map(pos => ({ x: pos.x, y: pos.y, collected: false }));
         let collected = 0;
 
         // Door
-        let door = { x: 36, y: 34 };
+        let door = { x: doorPos.x, y: doorPos.y };
 
         // Camera for scrolling/zoom feel
         let camera = { x: 0, y: 0 };
@@ -139,16 +162,28 @@
         let monsters = [];
         const devilPositions = [
             {x: 20, y: 1},
-            {x: 5, y: 10},
-            {x: 30, y: 15}
+            {x: 5, y: 11},
+            {x: 30, y: 16}
         ];
-        for (let pos of devilPositions) {
+        for (let index = 0; index < devilPositions.length; index++) {
+            let pos = devilPositions[index];
+            let patrolPoints = [];
+            if (index === 0) {
+                patrolPoints = [{x: 18, y: 1}, {x: 22, y: 1}, {x: 20, y: 3}];
+            } else if (index === 1) {
+                patrolPoints = [{x: 3, y: 11}, {x: 7, y: 11}, {x: 5, y: 14}];
+            } else {
+                patrolPoints = [{x: 28, y: 16}, {x: 32, y: 16}, {x: 30, y: 19}];
+            }
             monsters.push({
                 x: pos.x,
                 y: pos.y,
                 updateTimer: Math.random() * 60,
                 path: null,
-                pathTimer: 0
+                pathTimer: 0,
+                freezeTimer: 0,
+                patrolPoints: patrolPoints,
+                patrolIndex: 0
             });
         }
 
@@ -156,10 +191,45 @@
         let keys = {};
         let gameState = 'cutscene'; // Start with cutscene
         let cutsceneFrame = 0;
-        const INTRO_CUTSCENE_FRAMES = 600;
-        const COLLECT_CUTSCENE_FRAMES = 300;
-        const WIN_CUTSCENE_FRAMES = 600;
-        const GAMEOVER_CUTSCENE_FRAMES = 600;
+        const INTRO_CUTSCENE_FRAMES = 900; // Extended for better animation
+        const COLLECT_CUTSCENE_FRAMES = 450; // Extended
+        const WIN_CUTSCENE_FRAMES = 900; // Extended
+        const GAMEOVER_CUTSCENE_FRAMES = 750; // Extended
+        let warningTimer = 0;
+
+        // Particles for collection effects
+        let particles = [];
+
+        function createParticles(x, y) {
+            for (let i = 0; i < 10; i++) {
+                particles.push({
+                    x: x * TILE + TILE / 2,
+                    y: y * TILE + TILE / 2,
+                    vx: (Math.random() - 0.5) * 4,
+                    vy: (Math.random() - 0.5) * 4,
+                    life: 30,
+                    color: '#ff0'
+                });
+            }
+        }
+
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.1; // gravity
+                p.life--;
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+        }
+
+        // Easing function for smoother animations
+        function easeInOutCubic(t) {
+            return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+        }
 
         // Sound effects
         const bgMusic = new Audio('https://tabletopaudio.com/download.php?down=mp3&file=Undercroft.mp3'); // Example dark dungeon music, replace with actual URL
@@ -177,23 +247,59 @@
         const ui = document.getElementById('ui');
         ui.style.display = 'none'; // Hide UI during cutscene
 
+        function resetGame() {
+            // Re-randomize positions
+            shuffle(openPositions);
+            itemPos = openPositions.slice(0, 3);
+            doorPos = openPositions[3] || {x: 36, y: 34};
+            items = itemPos.map(pos => ({ x: pos.x, y: pos.y, collected: false }));
+            door = { x: doorPos.x, y: doorPos.y };
+            player = { px: 1 * TILE + TILE / 2, py: 1 * TILE + TILE / 2 };
+            collected = 0;
+            health = 150;
+            for (let item of items) item.collected = false;
+            for (let index = 0; index < monsters.length; index++) {
+                let m = monsters[index];
+                let pos = devilPositions[index];
+                m.x = pos.x;
+                m.y = pos.y;
+                m.path = null;
+                m.pathTimer = 0;
+                m.updateTimer = Math.random() * 60;
+                m.freezeTimer = 0;
+                m.patrolIndex = 0;
+            }
+            particles = [];
+            warningTimer = 0;
+            gameState = 'game';
+            ui.style.display = 'block';
+            cutsceneFrame = 0;
+            document.getElementById('tasks').textContent = collected;
+            document.getElementById('health').textContent = health;
+            bgMusic.play();
+        }
+
         document.addEventListener('keydown', e => {
             const key = e.key.toLowerCase();
             keys[key] = true;
-            if (gameState === 'cutscene' && e.key === ' ') {
+            if (key === 'r') {
+                if (gameState === 'game') {
+                    resetGame();
+                }
+                return;
+            }
+            if (gameState === 'cutscene' && key === ' ') {
                 gameState = 'game';
                 ui.style.display = 'block';
                 cutsceneText.style.display = 'none';
                 bgMusic.play();
-            } else if (gameState === 'collectCutscene' && e.key === ' ') {
+            } else if (gameState === 'collectCutscene' && key === ' ') {
                 gameState = 'game';
                 cutsceneText.style.display = 'none';
-            } else if (gameState === 'winCutscene' && e.key === ' ') {
-                alert('Congratulations! You escaped!');
-                location.reload();
-            } else if (gameState === 'gameOverCutscene' && e.key === ' ') {
-                alert('Game Over! Try again.');
-                location.reload();
+            } else if (gameState === 'winCutscene' && key === ' ') {
+                resetGame();
+            } else if (gameState === 'gameOverCutscene' && key === ' ') {
+                resetGame();
             }
         });
         document.addEventListener('keyup', e => {
@@ -297,14 +403,17 @@
         }
 
         function drawFogAndLight() {
-            // Fog: dark overlay with hole around player (far from player)
+            const lightRadius = collected >= 3 ? 60 : 80;
+            const fogColor = collected >= 3 ? 'rgba(139,0,0,0.9)' : 'rgba(0,0,0,0.8)';
+
+            // Fog: dark/red overlay with hole around player (far from player)
             const fogGradient = ctx.createRadialGradient(
                 player.px - camera.x, player.py - camera.y, 100, // inner clear radius (close to player)
                 player.px - camera.x, player.py - camera.y, 300  // outer foggy radius (far away)
             );
             fogGradient.addColorStop(0, 'rgba(0,0,0,0)');
             fogGradient.addColorStop(0.7, 'rgba(0,0,0,0.3)'); // semi-transparent far away
-            fogGradient.addColorStop(1, 'rgba(0,0,0,0.8)'); // full dark fog
+            fogGradient.addColorStop(1, fogColor); // full dark/red fog
 
             ctx.fillStyle = fogGradient;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -312,7 +421,7 @@
             // Light around player (close/mid range)
             const lightGradient = ctx.createRadialGradient(
                 player.px - camera.x, player.py - camera.y, 0,
-                player.px - camera.x, player.py - camera.y, 80  // light radius close/mid
+                player.px - camera.x, player.py - camera.y, lightRadius  // light radius close/mid
             );
             lightGradient.addColorStop(0, 'rgba(255, 215, 0, 0.8)');
             lightGradient.addColorStop(0.5, 'rgba(255, 215, 0, 0.4)');
@@ -320,6 +429,31 @@
 
             ctx.fillStyle = lightGradient;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function drawWarning() {
+            if (warningTimer <= 0) return;
+            warningTimer--;
+            ctx.save();
+            ctx.shadowColor = 'darkred';
+            ctx.shadowBlur = 10;
+            ctx.fillStyle = '#8B0000';
+            ctx.font = 'bold 28px monospace';
+            ctx.textAlign = 'center';
+            // Bloody effect: multiple offsets
+            const text = 'RUN! The monsters awaken!';
+            const x = canvas.width / 2;
+            const y = 40;
+            for (let dx = -2; dx <= 2; dx += 2) {
+                for (let dy = -1; dy <= 1; dy += 2) {
+                    ctx.fillText(text, x + dx, y + dy);
+                }
+            }
+            // Main text
+            ctx.fillStyle = '#FF0000';
+            ctx.shadowBlur = 5;
+            ctx.fillText(text, x, y);
+            ctx.restore();
         }
 
         function drawDirectionLine() {
@@ -351,22 +485,44 @@
         function drawCutscene() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Phase 1: Wandering in forest (0-200)
-            if (cutsceneFrame < 200) {
+            const progress = cutsceneFrame / INTRO_CUTSCENE_FRAMES;
+
+            // Phase 1: Wandering in forest (0-300 frames, extended)
+            if (cutsceneFrame < 300) {
+                const phaseProgress = cutsceneFrame / 300;
+                const eased = easeInOutCubic(phaseProgress);
                 ctx.fillStyle = '#006400';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
-                // Moving trees
-                for (let i = 0; i < 15; i++) {
-                    const tx = (i * 60 + cutsceneFrame * 1.5) % (canvas.width + 60) - 30;
-                    const ty = 400 + Math.sin((cutsceneFrame * 0.03) + i * 0.5) * 20;
+                // Moving trees with more sway
+                for (let i = 0; i < 20; i++) { // More trees
+                    const tx = (i * 40 + cutsceneFrame * 2) % (canvas.width + 80) - 40;
+                    const ty = 350 + Math.sin((cutsceneFrame * 0.05) + i * 0.3) * 30 * eased; // More sway
+                    const trunkHeight = 40 * eased;
                     // Trunk
                     ctx.fillStyle = '#8B4513';
-                    ctx.fillRect(tx, ty, 10, 30);
-                    // Leaves
+                    ctx.fillRect(tx, ty, 12, trunkHeight);
+                    // Leaves with bob
                     ctx.fillStyle = '#228B22';
+                    ctx.save();
+                    ctx.translate(tx + 6, ty - 10);
+                    ctx.rotate(Math.sin(cutsceneFrame * 0.02 + i) * 0.1 * eased);
                     ctx.beginPath();
-                    ctx.arc(tx + 5, ty - 10, 20, 0, Math.PI * 2);
+                    ctx.arc(0, 0, 25 * eased, 0, Math.PI * 2);
                     ctx.fill();
+                    ctx.restore();
+                }
+                // Simple player walking animation
+                const playerWalkX = (canvas.width / 2 - 50) + Math.sin(cutsceneFrame * 0.1) * 20 * eased;
+                const playerWalkY = canvas.height / 2 + 50;
+                if (playerSprite.complete) {
+                    ctx.save();
+                    ctx.translate(playerWalkX, playerWalkY);
+                    ctx.rotate(Math.sin(cutsceneFrame * 0.2) * 0.2);
+                    ctx.drawImage(playerSprite, -16, -16, 32, 32);
+                    ctx.restore();
+                } else {
+                    ctx.fillStyle = '#00f';
+                    ctx.fillRect(playerWalkX - 8, playerWalkY - 8, 16, 16);
                 }
                 ctx.fillStyle = '#fff';
                 ctx.font = '24px monospace';
@@ -374,56 +530,102 @@
                 ctx.fillText('Lost in the enchanted forest,', canvas.width / 2, canvas.height / 2 - 50);
                 ctx.fillText('you seek a way out.', canvas.width / 2, canvas.height / 2 + 20);
             } 
-            // Phase 2: Discovering the door (200-400)
-            else if (cutsceneFrame < 400) {
+            // Phase 2: Discovering the door (300-600 frames)
+            else if (cutsceneFrame < 600) {
+                const phaseProgress = (cutsceneFrame - 300) / 300;
+                const eased = easeInOutCubic(phaseProgress);
+                // Fade from green to dark
+                const greenAlpha = 1 - eased;
+                ctx.fillStyle = `rgba(0, 100, 0, ${greenAlpha})`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = '#111';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = '#ffd700';
                 ctx.font = '24px monospace';
                 ctx.textAlign = 'center';
                 ctx.fillText('A glowing door appears in the shadows...', canvas.width / 2, canvas.height / 2 - 50);
-                // Draw door
+                // Draw door with scale in
+                const doorScale = eased;
+                const doorX = canvas.width / 2 - 20 * doorScale;
+                const doorY = canvas.height / 2 + 20;
+                const doorW = 40 * doorScale;
+                const doorH = 80 * doorScale;
+                ctx.save();
+                ctx.translate(canvas.width / 2, canvas.height / 2 + 20);
+                ctx.scale(doorScale, doorScale);
                 ctx.fillStyle = '#8B0000';
-                ctx.fillRect(canvas.width / 2 - 20, canvas.height / 2 + 20, 40, 80);
+                ctx.fillRect(-20, 0, 40, 80);
                 ctx.fillStyle = '#ffd700';
-                ctx.fillRect(canvas.width / 2 - 10, canvas.height / 2 + 20, 20, 10); // handle
+                ctx.fillRect(-10, 0, 20, 10); // handle
+                ctx.restore();
+                // Player approaching door
+                const playerApproachX = canvas.width / 2 - 100 + 50 * eased;
+                if (playerSprite.complete) {
+                    ctx.drawImage(playerSprite, playerApproachX, canvas.height / 2 - 16, 32, 32);
+                } else {
+                    ctx.fillStyle = '#00f';
+                    ctx.fillRect(playerApproachX, canvas.height / 2 - 8, 16, 16);
+                }
             } 
-            // Phase 3: Devil appears (400-600)
-            else if (cutsceneFrame < 600) {
+            // Phase 3: Devil appears (600-900 frames)
+            else {
+                const phaseProgress = (cutsceneFrame - 600) / 300;
+                const eased = easeInOutCubic(phaseProgress);
                 ctx.fillStyle = '#111';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
-                // Creepy red overlay
-                const fadeStart = 400;
-                const fadeDuration = 200;
-                let alpha = Math.min(1, (cutsceneFrame - fadeStart) / fadeDuration);
-                ctx.fillStyle = `rgba(139, 0, 0, ${alpha * 0.3})`;
+                // Creepy red overlay with pulse
+                const alpha = Math.min(1, eased) * (0.3 + Math.sin(cutsceneFrame * 0.05) * 0.1);
+                ctx.fillStyle = `rgba(139, 0, 0, ${alpha})`;
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = '#f00';
                 ctx.font = '24px monospace';
                 ctx.textAlign = 'center';
                 ctx.fillText('But the Devil stands guard!', canvas.width / 2, canvas.height / 2 - 100);
-                // Door
+                // Door with glow
+                ctx.save();
+                ctx.shadowColor = '#ffd700';
+                ctx.shadowBlur = 20 * eased;
                 ctx.fillStyle = '#8B0000';
                 ctx.fillRect(canvas.width / 2 - 25, canvas.height / 2 - 20, 50, 100);
-                // Handle
                 ctx.fillStyle = '#ff0';
                 ctx.fillRect(canvas.width / 2 - 5, canvas.height / 2 + 20, 10, 10);
-                // Red eyes fade in
-                const eyeAlpha = Math.min(1, (cutsceneFrame - fadeStart) / fadeDuration);
+                ctx.restore();
+                // Red eyes fade in with scale
+                const eyeScale = 1 + eased * 0.5;
                 const eyeX = canvas.width / 2;
                 const eyeY = canvas.height / 2 + 10;
                 ctx.save();
-                ctx.fillStyle = `rgba(255, 0, 0, ${eyeAlpha})`;
+                ctx.scale(eyeScale, eyeScale);
+                ctx.fillStyle = '#f00';
                 // Left eye
                 ctx.beginPath();
-                ctx.arc(eyeX - 10, eyeY, 8, 0, Math.PI * 2);
+                ctx.arc((eyeX - 10)/eyeScale, eyeY/eyeScale, 8, 0, Math.PI * 2);
                 ctx.fill();
                 // Right eye
                 ctx.beginPath();
-                ctx.arc(eyeX + 10, eyeY, 8, 0, Math.PI * 2);
+                ctx.arc((eyeX + 10)/eyeScale, eyeY/eyeScale, 8, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.restore();
+                // Devil silhouette emerging
+                const devilY = canvas.height / 2 + 50 - eased * 100;
+                if (monsterSprite.complete) {
+                    ctx.globalAlpha = eased;
+                    ctx.drawImage(monsterSprite, canvas.width / 2 - 16, devilY - 16, 32, 32);
+                    ctx.globalAlpha = 1;
+                } else {
+                    ctx.fillStyle = 'rgba(255, 0, 0, ' + eased + ')';
+                    ctx.fillRect(canvas.width / 2 - 8, devilY - 8, 16, 16);
+                }
             }
+            // Prompt text with fade in
+            const promptAlpha = Math.min(1, cutsceneFrame / 100);
+            ctx.save();
+            ctx.globalAlpha = promptAlpha;
+            ctx.fillStyle = '#ffd700';
+            ctx.font = '18px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('Press SPACE to begin', canvas.width / 2, canvas.height - 50);
+            ctx.restore();
             ctx.textAlign = 'left';
         }
 
@@ -432,12 +634,13 @@
             ctx.fillStyle = '#111';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Three cubes merging animation
             const progress = cutsceneFrame / COLLECT_CUTSCENE_FRAMES;
-            const cubeSize = 32 * (1 - progress * 0.5);
+            const eased = easeInOutCubic(progress);
+            const cubeSize = 32 * (1 - eased * 0.5);
             const glowIntensity = Math.sin(cutsceneFrame * 0.2) * 0.5 + 0.5;
+            const rotation = cutsceneFrame * 0.05;
 
-            // Draw three cubes converging to center
+            // Draw three cubes converging to center with rotation and scale
             const centerX = canvas.width / 2;
             const centerY = canvas.height / 2;
             const positions = [
@@ -447,28 +650,40 @@
             ];
 
             for (let i = 0; i < 3; i++) {
-                let px = positions[i].x + (centerX - positions[i].x) * progress;
-                let py = positions[i].y + (centerY - positions[i].y) * progress;
+                let px = positions[i].x + (centerX - positions[i].x) * eased;
+                let py = positions[i].y + (centerY - positions[i].y) * eased;
                 ctx.save();
                 ctx.translate(px, py);
+                ctx.rotate(rotation * (i + 1));
                 ctx.scale(cubeSize / 32, cubeSize / 32);
                 drawGlowingCube(0, 0, false);
                 ctx.restore();
-                // Glow
-                ctx.fillStyle = `rgba(255, 255, 0, ${glowIntensity * 0.5})`;
+                // Enhanced glow with pulse
+                const glowAlpha = glowIntensity * (0.5 + Math.sin(cutsceneFrame * 0.1) * 0.2);
+                ctx.fillStyle = `rgba(255, 255, 0, ${glowAlpha})`;
                 ctx.beginPath();
-                ctx.arc(px, py, 20 * glowIntensity, 0, Math.PI * 2);
+                ctx.arc(px, py, 20 * glowIntensity * eased, 0, Math.PI * 2);
+                ctx.fill();
+                // Trail effect
+                ctx.fillStyle = `rgba(255, 255, 0, ${0.3 * (1 - eased)})`;
+                ctx.beginPath();
+                ctx.arc(positions[i].x, positions[i].y, 10, 0, Math.PI * 2);
                 ctx.fill();
             }
 
-            // Merged key or something at center
-            if (progress > 0.8) {
+            // Merged key with shine animation
+            if (eased > 0.7) {
+                const keyScale = 1 + Math.sin(cutsceneFrame * 0.3) * 0.2;
+                ctx.save();
+                ctx.translate(centerX, centerY);
+                ctx.scale(keyScale, keyScale);
                 ctx.fillStyle = '#ffd700';
-                ctx.fillRect(centerX - 10, centerY - 10, 20, 20);
+                ctx.fillRect(-10, -10, 20, 20);
                 ctx.fillStyle = '#fff';
                 ctx.font = '16px monospace';
                 ctx.textAlign = 'center';
-                ctx.fillText('Key Formed!', centerX, centerY + 40);
+                ctx.fillText('Key Formed!', 0, 40);
+                ctx.restore();
             }
 
             ctx.fillStyle = '#fff';
@@ -477,6 +692,11 @@
             ctx.fillText('All cubes collected! The key is formed.', canvas.width / 2, 100);
             ctx.fillText('Now head to the door!', canvas.width / 2, 130);
 
+            // Prompt text
+            ctx.fillStyle = '#ffd700';
+            ctx.font = '18px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('Press SPACE to continue', canvas.width / 2, canvas.height - 50);
             ctx.textAlign = 'left';
         }
 
@@ -489,89 +709,134 @@
                 winSound.play();
             }
 
-            // Phase 1: Entering the door (0-200)
-            if (cutsceneFrame < 200) {
+            const progress = cutsceneFrame / WIN_CUTSCENE_FRAMES;
+            const phase = Math.floor(progress * 3);
+
+            // Phase 1: Entering the door (0-300 frames)
+            if (cutsceneFrame < 300) {
+                const phaseProgress = cutsceneFrame / 300;
+                const eased = easeInOutCubic(phaseProgress);
                 ctx.fillStyle = '#111';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
-                // Glowing door
+                // Glowing door with pulse
+                const glow = Math.sin(cutsceneFrame * 0.1) * 0.3 + 0.7;
+                ctx.save();
+                ctx.shadowColor = '#ffd700';
+                ctx.shadowBlur = 30 * glow;
                 ctx.fillStyle = '#ffd700';
                 ctx.fillRect(canvas.width / 2 - 25, canvas.height / 2 - 50, 50, 100);
-                // Player sprite entering (simple animation)
-                const playerX = canvas.width / 2 - 25 + (cutsceneFrame * 0.5);
+                ctx.restore();
+                // Player sprite entering with acceleration
+                const playerX = canvas.width / 2 - 25 + (cutsceneFrame * 1.5) * eased; // Faster with ease
+                const playerY = canvas.height / 2 - 16 + Math.sin(cutsceneFrame * 0.3) * 3; // Slight bob
                 if (playerSprite.complete) {
-                    ctx.drawImage(playerSprite, playerX, canvas.height / 2 - 16, 32, 32);
+                    ctx.save();
+                    ctx.translate(playerX, playerY);
+                    ctx.rotate(Math.sin(cutsceneFrame * 0.4) * 0.1);
+                    ctx.drawImage(playerSprite, -16, -16, 32, 32);
+                    ctx.restore();
                 } else {
                     ctx.fillStyle = '#00f';
-                    ctx.fillRect(playerX, canvas.height / 2 - 8, 16, 16);
+                    ctx.fillRect(playerX - 8, playerY - 8, 16, 16);
                 }
                 ctx.fillStyle = '#fff';
                 ctx.font = '24px monospace';
                 ctx.textAlign = 'center';
                 ctx.fillText('You dash through the door!', canvas.width / 2, canvas.height / 2 - 100);
             } 
-            // Phase 2: Devil chases (200-400)
-            else if (cutsceneFrame < 400) {
+            // Phase 2: Devil chases (300-600 frames)
+            else if (cutsceneFrame < 600) {
+                const phaseProgress = (cutsceneFrame - 300) / 300;
+                const eased = easeInOutCubic(phaseProgress);
                 ctx.fillStyle = '#111';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
-                // Door closing
-                const doorAlpha = Math.min(1, (cutsceneFrame - 200) / 200);
+                // Door closing with slide
+                const doorOffset = eased * 50;
                 ctx.save();
-                ctx.globalAlpha = 1 - doorAlpha;
+                ctx.globalAlpha = 1 - eased;
                 ctx.fillStyle = '#ffd700';
-                ctx.fillRect(canvas.width / 2 - 25, canvas.height / 2 - 50, 50, 100);
+                ctx.fillRect(canvas.width / 2 - 25 + doorOffset, canvas.height / 2 - 50, 50, 100);
                 ctx.restore();
-                // Devil appearing behind
-                const devilX = canvas.width / 2 + 50 + Math.sin((cutsceneFrame - 200) * 0.1) * 10;
+                // Devil appearing behind with lunge
+                const devilX = canvas.width / 2 + 50 + Math.sin((cutsceneFrame - 300) * 0.2) * 20 * eased;
+                const devilY = canvas.height / 2 + Math.cos((cutsceneFrame - 300) * 0.15) * 10;
                 if (monsterSprite.complete) {
-                    ctx.drawImage(monsterSprite, devilX, canvas.height / 2, 32, 32);
+                    ctx.save();
+                    ctx.translate(devilX, devilY);
+                    ctx.scale(1 + eased * 0.3, 1 + eased * 0.3); // Grow slightly
+                    ctx.rotate(Math.sin((cutsceneFrame - 300) * 0.3) * 0.3);
+                    ctx.drawImage(monsterSprite, -16, -16, 32, 32);
+                    ctx.restore();
                 } else {
                     ctx.fillStyle = '#f00';
-                    ctx.fillRect(devilX, canvas.height / 2, 16, 16);
+                    ctx.fillRect(devilX - 8, devilY - 8, 16, 16);
                 }
-                // Red eyes
+                // Red eyes with flare
+                ctx.save();
+                ctx.shadowColor = '#f00';
+                ctx.shadowBlur = 10 * eased;
                 ctx.fillStyle = '#f00';
                 ctx.beginPath();
-                ctx.arc(devilX + 5, canvas.height / 2 + 5, 3, 0, Math.PI * 2);
+                ctx.arc(devilX - 5, devilY + 5, 3 * (1 + eased), 0, Math.PI * 2);
                 ctx.fill();
                 ctx.beginPath();
-                ctx.arc(devilX + 11, canvas.height / 2 + 5, 3, 0, Math.PI * 2);
+                ctx.arc(devilX + 5, devilY + 5, 3 * (1 + eased), 0, Math.PI * 2);
                 ctx.fill();
+                ctx.restore();
                 ctx.fillStyle = '#fff';
                 ctx.font = '24px monospace';
                 ctx.textAlign = 'center';
                 ctx.fillText('The Devil lunges, but too late!', canvas.width / 2, canvas.height / 2 - 100);
             } 
-            // Phase 3: Escaping into light (400-600)
-            else if (cutsceneFrame < 600) {
-                // Bright light overlay
-                const lightAlpha = Math.min(1, (cutsceneFrame - 400) / 200);
-                ctx.fillStyle = `rgba(255, 255, 255, ${lightAlpha * 0.8})`;
+            // Phase 3: Escaping into light (600-900 frames)
+            else {
+                const phaseProgress = (cutsceneFrame - 600) / 300;
+                const eased = easeInOutCubic(phaseProgress);
+                // Bright light overlay with bloom
+                const lightAlpha = eased * 0.8;
+                const lightGradient = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, 0, canvas.width / 2, canvas.height / 2, canvas.width);
+                lightGradient.addColorStop(0, `rgba(255, 255, 255, ${lightAlpha})`);
+                lightGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+                ctx.fillStyle = lightGradient;
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
-                // Player running forward (pixelated animation)
-                const playerRunX = (cutsceneFrame - 400) * 2;
-                const playerRunY = canvas.height / 2 + Math.sin((cutsceneFrame - 400) * 0.2) * 5;
+                // Player running forward with trail
+                const playerRunX = (cutsceneFrame - 600) * 3 * eased;
+                const playerRunY = canvas.height / 2 + Math.sin((cutsceneFrame - 600) * 0.3) * 8 * eased;
                 if (playerSprite.complete) {
-                    ctx.globalAlpha = 1 - lightAlpha * 0.5;
-                    ctx.drawImage(playerSprite, playerRunX, playerRunY - 16, 32, 32);
+                    ctx.globalAlpha = 1 - lightAlpha * 0.6;
+                    ctx.save();
+                    ctx.translate(playerRunX, playerRunY);
+                    ctx.rotate(Math.sin((cutsceneFrame - 600) * 0.4) * 0.2);
+                    ctx.drawImage(playerSprite, -16, -16, 32, 32);
+                    ctx.restore();
+                    // Trail
+                    ctx.globalAlpha = 0.5 * (1 - eased);
+                    ctx.fillStyle = '#00f';
+                    ctx.fillRect(playerRunX - 32, playerRunY - 16, 32, 32);
                 } else {
                     ctx.fillStyle = '#00f';
-                    ctx.globalAlpha = 1 - lightAlpha * 0.5;
-                    ctx.fillRect(playerRunX, playerRunY - 8, 16, 16);
+                    ctx.globalAlpha = 1 - lightAlpha * 0.6;
+                    ctx.fillRect(playerRunX - 8, playerRunY - 8, 16, 16);
                 }
                 ctx.globalAlpha = 1;
-                // Forest fading in
-                ctx.fillStyle = `rgba(0, 100, 0, ${lightAlpha})`;
+                // Forest fading in with parallax trees
+                const forestAlpha = eased;
+                ctx.fillStyle = `rgba(0, 100, 0, ${forestAlpha * 0.5})`;
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
-                // Trees appearing
-                for (let i = 0; i < 10; i++) {
-                    const tx = playerRunX + i * 60 + (cutsceneFrame - 400) * 1;
-                    const ty = canvas.height - 100 + Math.sin((cutsceneFrame * 0.03) + i * 0.5) * 10;
-                    ctx.fillStyle = `rgba(139, 69, 19, ${lightAlpha})`;
-                    ctx.fillRect(tx, ty, 10, 30);
-                    ctx.fillStyle = `rgba(34, 139, 34, ${lightAlpha})`;
+                // Trees appearing with depth
+                for (let i = 0; i < 15; i++) {
+                    const depth = i / 15;
+                    const tx = playerRunX + i * 80 + (cutsceneFrame - 600) * (1 + depth) * 1.5;
+                    const ty = canvas.height - 120 + Math.sin((cutsceneFrame * 0.04) + i * 0.5) * 15 * forestAlpha;
+                    ctx.save();
+                    ctx.globalAlpha = forestAlpha * (1 - depth * 0.5);
+                    ctx.fillStyle = `rgba(139, 69, 19, ${forestAlpha})`;
+                    ctx.fillRect(tx, ty, 10 * (1 + depth), 40 * (1 + depth));
+                    ctx.fillStyle = `rgba(34, 139, 34, ${forestAlpha})`;
                     ctx.beginPath();
-                    ctx.arc(tx + 5, ty - 10, 20, 0, Math.PI * 2);
+                    ctx.arc(tx + 5 * (1 + depth), ty - 15 * (1 + depth), 25 * (1 + depth), 0, Math.PI * 2);
                     ctx.fill();
+                    ctx.restore();
                 }
                 ctx.fillStyle = '#fff';
                 ctx.font = '24px monospace';
@@ -579,6 +844,11 @@
                 ctx.fillText('You escape the Devil\'s domain!', canvas.width / 2, 100);
                 ctx.fillText('Freedom awaits...', canvas.width / 2, 130);
             }
+            // Prompt text
+            ctx.fillStyle = '#ffd700';
+            ctx.font = '18px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('Press SPACE to play again', canvas.width / 2, canvas.height - 50);
             ctx.textAlign = 'left';
         }
 
@@ -587,27 +857,33 @@
             ctx.fillStyle = '#111';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Devil grabbing player animation
             const progress = cutsceneFrame / GAMEOVER_CUTSCENE_FRAMES;
-            const shake = Math.sin(cutsceneFrame * 0.3) * 5;
+            const eased = easeInOutCubic(progress);
+            const shakeIntensity = Math.sin(cutsceneFrame * 0.4) * 10 * eased;
 
-            // Player in center
-            const playerX = canvas.width / 2 + shake;
-            const playerY = canvas.height / 2 + shake;
+            // Player in center with shake and fade
+            const playerX = canvas.width / 2 + shakeIntensity;
+            const playerY = canvas.height / 2 + shakeIntensity;
+            ctx.save();
+            ctx.translate(shakeIntensity, shakeIntensity);
             if (playerSprite.complete) {
+                ctx.globalAlpha = 1 - eased * 0.5;
                 ctx.drawImage(playerSprite, playerX - 16, playerY - 16, 32, 32);
             } else {
                 ctx.fillStyle = '#00f';
+                ctx.globalAlpha = 1 - eased * 0.5;
                 ctx.fillRect(playerX - 8, playerY - 8, 16, 16);
             }
+            ctx.restore();
 
-            // Devil closing in
-            const devilScale = 1 + progress * 0.5;
-            const devilX = canvas.width / 2;
-            const devilY = canvas.height / 2;
+            // Devil closing in with scale and rotation
+            const devilScale = 1 + eased * 1.5;
+            const devilX = canvas.width / 2 + Math.sin(cutsceneFrame * 0.2) * 5;
+            const devilY = canvas.height / 2 + Math.cos(cutsceneFrame * 0.25) * 3;
             ctx.save();
             ctx.translate(devilX, devilY);
             ctx.scale(devilScale, devilScale);
+            ctx.rotate(Math.sin(cutsceneFrame * 0.1) * 0.5 * eased);
             if (monsterSprite.complete) {
                 ctx.drawImage(monsterSprite, -16, -16, 32, 32);
             } else {
@@ -616,12 +892,16 @@
             }
             ctx.restore();
 
-            // Red flash
-            if (progress > 0.5) {
-                const flashAlpha = Math.sin(cutsceneFrame * 0.1) * 0.3;
+            // Red flash with increasing frequency
+            if (eased > 0.3) {
+                const flashAlpha = Math.sin(cutsceneFrame * 0.15) * 0.4 * eased;
                 ctx.fillStyle = `rgba(255, 0, 0, ${flashAlpha})`;
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
             }
+
+            // Darken screen gradually
+            ctx.fillStyle = `rgba(0, 0, 0, ${eased * 0.7})`;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             ctx.fillStyle = '#f00';
             ctx.font = '24px monospace';
@@ -629,6 +909,11 @@
             ctx.fillText('The Devil catches you!', canvas.width / 2, 100);
             ctx.fillText('Your soul is claimed...', canvas.width / 2, 130);
 
+            // Prompt text
+            ctx.fillStyle = '#ffd700';
+            ctx.font = '18px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('Press SPACE to try again', canvas.width / 2, canvas.height - 50);
             ctx.textAlign = 'left';
         }
 
@@ -671,6 +956,7 @@
                     item.collected = true;
                     collected++;
                     justCollected = true;
+                    createParticles(item.x, item.y);
                     document.getElementById('tasks').textContent = collected;
                     collectSound.play();
                 }
@@ -678,6 +964,7 @@
 
             // Trigger collect cutscene if third item collected
             if (justCollected && collected >= 3 && gameState === 'game') {
+                warningTimer = 180;
                 gameState = 'collectCutscene';
                 ui.style.display = 'none';
                 cutsceneText.style.display = 'block';
@@ -691,32 +978,48 @@
                 cutsceneFrame = 0;
             }
 
+            // Update particles
+            updateParticles();
+
             // Update each monster
-            const chaseDist = collected >= 3 ? 20 : 10;
+            const detectionDist = collected >= 3 ? 100 : 10;
             for (let monster of monsters) {
+                if (monster.freezeTimer > 0) {
+                    monster.freezeTimer--;
+                    continue; // Skip movement if frozen
+                }
+
                 const distToPlayer = Math.abs(monster.x - playerTileX) + Math.abs(monster.y - playerTileY);
-                let isChasing = distToPlayer < chaseDist;
+                let isChasing = distToPlayer < detectionDist;
+
+                let target = isChasing ? {x: playerTileX, y: playerTileY} : monster.patrolPoints[monster.patrolIndex];
+
                 if (isChasing) {
                     monster.pathTimer++;
-                    if (monster.pathTimer > (collected >= 3 ? 15 : 30)) { // Faster path update when chasing with key
+                    if (monster.pathTimer > (collected >= 3 ? 3 : 8)) {
                         monster.pathTimer = 0;
-                        const playerTile = {x: playerTileX, y: playerTileY};
-                        monster.path = astar({x: monster.x, y: monster.y}, playerTile);
+                        monster.path = astar({x: monster.x, y: monster.y}, target);
                     }
                 } else {
-                    monster.path = null;
-                    monster.pathTimer = 0;
+                    if (!monster.path || monster.path.length <= 1) {
+                        monster.path = astar({x: monster.x, y: monster.y}, target);
+                        if (monster.path && monster.path.length <= 1) {
+                            monster.patrolIndex = (monster.patrolIndex + 1) % monster.patrolPoints.length;
+                            target = monster.patrolPoints[monster.patrolIndex];
+                            monster.path = astar({x: monster.x, y: monster.y}, target);
+                        }
+                    }
                 }
 
                 monster.updateTimer++;
-                if (monster.updateTimer > 15) {
+                if (monster.updateTimer > 15) { // Lower speed: move less frequently
                     monster.updateTimer = 0;
                     let nextPos = null;
-                    if (isChasing && monster.path && monster.path.length > 1) {
+                    if (monster.path && monster.path.length > 1) {
                         nextPos = monster.path[1];
                         monster.path.shift();
                     } else {
-                        // Random move or patrol
+                        // Random move if no path
                         const neighbors = getNeighbors({x: monster.x, y: monster.y});
                         if (neighbors.length > 0) {
                             nextPos = neighbors[Math.floor(Math.random() * neighbors.length)];
@@ -728,8 +1031,9 @@
                     }
                     // Check collision with player
                     if (playerTileX === monster.x && playerTileY === monster.y) {
-                        health -= 30;
+                        health -= 20;
                         document.getElementById('health').textContent = health;
+                        monster.freezeTimer = 120; // Freeze for 2 seconds (assuming 60 FPS)
                         hurtSound.play();
                         if (health <= 0) {
                             gameState = 'gameOverCutscene';
@@ -767,7 +1071,8 @@
                             ctx.fillStyle = '#555';
                             ctx.fillRect(tileX, tileY, TILE, TILE);
                         }
-                    } else if (map[y][x] === 0) {
+                    } else {
+                        // Floor for 0 or anything else
                         if (floorTexture.complete) {
                             ctx.drawImage(floorTexture, tileX, tileY, TILE, TILE);
                         } else {
@@ -822,8 +1127,20 @@
                 }
             }
 
+            // Draw particles
+            for (let p of particles) {
+                ctx.save();
+                ctx.globalAlpha = p.life / 30;
+                ctx.fillStyle = p.color;
+                ctx.fillRect(p.x - camera.x - 2, p.y - camera.y - 2, 4, 4);
+                ctx.restore();
+            }
+
             // Draw fog and light effects
             drawFogAndLight();
+
+            // Draw warning
+            drawWarning();
 
             // Draw direction line to door if key collected
             drawDirectionLine();
@@ -872,4 +1189,4 @@
         document.getElementById('health').textContent = health;
     </script>
 </body>
-</html>         
+</html>
